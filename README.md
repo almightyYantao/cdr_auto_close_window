@@ -2,6 +2,19 @@
 
 自动检测并处理 CorelDRAW 打开文件时的各种错误弹窗。
 
+## 版本说明
+
+### 标准版 (CDR-Popup-Handler.exe)
+- 使用 Windows API 获取控件文本
+- 适用于使用标准 Windows 控件的弹窗
+
+### Hook 版 (CDR-Popup-Handler-Hook.exe)
+- 使用 DLL 注入 + GDI Hook 技术
+- 拦截 TextOut/DrawText 等函数
+- 能够获取自绘控件的文本（GDI 绘制的文字）
+- **需要管理员权限运行**
+- 需要 gdi_hook.dll 在同一目录
+
 ## 支持的弹窗类型
 
 | 错误类型 | 处理方式 |
@@ -13,29 +26,40 @@
 
 ## 下载
 
-前往 [Actions](../../actions) 页面，点击最新的构建，下载 `CDR弹窗处理工具` artifact。
+前往 [Actions](../../actions) 页面，点击最新的构建，下载 artifact。
 
 ## 使用方法
 
-1. 下载并解压 `CDR弹窗处理工具.exe`
-2. 双击运行程序
-3. 保持程序在后台运行
-4. 正常使用 CorelDRAW 打开文件
-5. 弹窗会被自动处理
-6. 按 `Ctrl+C` 退出程序
+### 标准版
+1. 下载 `CDR-Popup-Handler-Standard`
+2. 解压后双击运行 `CDR-Popup-Handler.exe`
 
-## 从源码运行
+### Hook 版
+1. 下载 `CDR-Popup-Handler-Hook`
+2. 确保 `gdi_hook.dll` 和 `CDR-Popup-Handler-Hook.exe` 在同一目录
+3. **右键以管理员身份运行** `CDR-Popup-Handler-Hook.exe`
 
-```bash
-# 需要 Python 3.8+ 和 Windows
-python cdr_popup_handler.py
+## 技术原理
+
+### Hook 版工作流程
+1. 创建共享内存
+2. 注入 gdi_hook.dll 到 CorelDRAW 进程
+3. DLL Hook 住 TextOutW/DrawTextW 等 GDI 函数
+4. 捕获所有文本绘制内容写入共享内存
+5. Python 程序读取共享内存，匹配规则，点击按钮
+
+## 自行编译
+
+### 编译 DLL (需要 Visual Studio)
+```cmd
+cd hook
+cl /LD /EHsc gdi_hook.cpp user32.lib gdi32.lib /Fe:gdi_hook.dll
 ```
 
-## 自行打包
-
-```bash
+### 编译 EXE
+```cmd
 pip install pyinstaller
-pyinstaller --onefile --console --name "CDR弹窗处理工具" cdr_popup_handler.py
+pyinstaller --onefile --console --name "CDR-Popup-Handler-Hook" --add-data "gdi_hook.dll;." cdr_popup_handler_hook.py
 ```
 
 ## License

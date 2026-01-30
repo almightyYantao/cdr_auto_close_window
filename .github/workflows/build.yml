@@ -1,9 +1,9 @@
-name: Build Windows EXE
+name: Build Windows EXE (Hook Version)
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -17,17 +17,45 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install dependencies
+    - name: Set up MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+    
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller
     
-    - name: Build EXE
+    - name: Compile Hook DLL
+      run: |
+        cd hook
+        cl /LD /EHsc /O2 /W3 gdi_hook.cpp user32.lib gdi32.lib /Fe:gdi_hook.dll
+        dir
+      shell: cmd
+    
+    - name: Copy DLL to root
+      run: |
+        copy hook\gdi_hook.dll .
+        dir
+      shell: cmd
+    
+    - name: Build Standard EXE (no hook)
       run: |
         pyinstaller --onefile --console --name "CDR-Popup-Handler" cdr_popup_handler.py
     
-    - name: Upload EXE
+    - name: Build Hook EXE
+      run: |
+        pyinstaller --onefile --console --name "CDR-Popup-Handler-Hook" --add-data "gdi_hook.dll;." cdr_popup_handler_hook.py
+    
+    - name: Upload Standard EXE
       uses: actions/upload-artifact@v4
       with:
-        name: CDR-Popup-Handler
+        name: CDR-Popup-Handler-Standard
         path: dist/CDR-Popup-Handler.exe
+    
+    - name: Upload Hook EXE and DLL
+      uses: actions/upload-artifact@v4
+      with:
+        name: CDR-Popup-Handler-Hook
+        path: |
+          dist/CDR-Popup-Handler-Hook.exe
+          gdi_hook.dll
