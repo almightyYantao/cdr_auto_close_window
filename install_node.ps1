@@ -1,11 +1,11 @@
-# Clawdbot Node Windows 一键安装脚本
-# 用法: 在 PowerShell (管理员) 中运行:
-#   irm https://raw.githubusercontent.com/almightyYantao/cdr_auto_close_window/main/install_node.ps1 | iex
+# Clawdbot Node Windows 一键安装脚本 (带代理)
+# 用法: 在 PowerShell (管理员) 中运行
 
 param(
     [string]$GatewayHost = "10.10.12.76",
     [string]$GatewayPort = "18789",
-    [string]$NodeName = "Windows-Test-Node"
+    [string]$NodeName = "Windows-Test-Node",
+    [string]$Proxy = "http://127.0.0.1:7897"
 )
 
 Write-Host "========================================" -ForegroundColor Cyan
@@ -13,43 +13,51 @@ Write-Host "  Clawdbot Node 一键安装脚本" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
+# 设置代理
+Write-Host "[0/4] 设置代理: $Proxy" -ForegroundColor Yellow
+$env:HTTP_PROXY = $Proxy
+$env:HTTPS_PROXY = $Proxy
+$env:ALL_PROXY = $Proxy
+[System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy($Proxy)
+Write-Host "  ✅ 代理已设置" -ForegroundColor Green
+
 # 1. 检查 Node.js
 Write-Host "[1/4] 检查 Node.js..." -ForegroundColor Yellow
 $nodeVersion = node --version 2>$null
 if (-not $nodeVersion) {
     Write-Host "  -> 未安装 Node.js，正在安装..." -ForegroundColor Yellow
     
-    # 使用 winget 安装（Windows 10/11 内置）
-    $wingetInstalled = Get-Command winget -ErrorAction SilentlyContinue
-    if ($wingetInstalled) {
-        winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
-    } else {
-        # 备选：直接下载 MSI
-        $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
-        $nodeMsi = "$env:TEMP\node-installer.msi"
-        
-        Write-Host "  -> 下载 Node.js..." -ForegroundColor Gray
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeMsi -UseBasicParsing
-        
-        Write-Host "  -> 安装 Node.js..." -ForegroundColor Gray
-        Start-Process msiexec.exe -ArgumentList "/i", $nodeMsi, "/quiet", "/norestart" -Wait
-    }
+    # 直接下载 MSI
+    $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
+    $nodeMsi = "$env:TEMP\node-installer.msi"
+    
+    Write-Host "  -> 下载 Node.js (通过代理)..." -ForegroundColor Gray
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    
+    $webClient = New-Object System.Net.WebClient
+    $webClient.Proxy = New-Object System.Net.WebProxy($Proxy)
+    $webClient.DownloadFile($nodeUrl, $nodeMsi)
+    
+    Write-Host "  -> 安装 Node.js..." -ForegroundColor Gray
+    Start-Process msiexec.exe -ArgumentList "/i", $nodeMsi, "/quiet", "/norestart" -Wait
     
     # 刷新环境变量
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     
-    Write-Host "  ✅ Node.js 安装完成，请重新打开 PowerShell 再运行此脚本" -ForegroundColor Green
+    Write-Host "  ✅ Node.js 安装完成" -ForegroundColor Green
     Write-Host ""
+    Write-Host "  ⚠️ 请重新打开 PowerShell 再运行此脚本！" -ForegroundColor Yellow
     Read-Host "按 Enter 退出"
     exit
 } else {
     Write-Host "  ✅ Node.js 已安装: $nodeVersion" -ForegroundColor Green
 }
 
-# 2. 安装 Clawdbot
+# 2. 设置 npm 代理并安装 Clawdbot
 Write-Host "[2/4] 安装 Clawdbot..." -ForegroundColor Yellow
-npm install -g clawdbot 2>$null
+npm config set proxy $Proxy
+npm config set https-proxy $Proxy
+npm install -g clawdbot
 Write-Host "  ✅ Clawdbot 安装完成" -ForegroundColor Green
 
 # 3. 创建桌面快捷启动脚本
