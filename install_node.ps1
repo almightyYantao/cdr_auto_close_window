@@ -21,42 +21,75 @@ $env:ALL_PROXY = $Proxy
 [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy($Proxy)
 Write-Host "  Done"
 
-# Check Node.js
+# Check Node.js version
 Write-Host "[1/4] Checking Node.js..."
 $nodeVersion = node --version 2>$null
+$needInstall = $false
+
 if (-not $nodeVersion) {
-    Write-Host "  Node.js not found, installing..."
+    Write-Host "  Node.js not found"
+    $needInstall = $true
+} else {
+    # Check version >= 20
+    $versionNum = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
+    if ($versionNum -lt 20) {
+        Write-Host "  Node.js $nodeVersion is too old (need v20+)"
+        $needInstall = $true
+    } else {
+        Write-Host "  Node.js $nodeVersion OK"
+    }
+}
+
+if ($needInstall) {
+    Write-Host "  Downloading Node.js v20..."
     
     $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
     $nodeMsi = "$env:TEMP\node-installer.msi"
     
-    Write-Host "  Downloading Node.js..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
     $webClient = New-Object System.Net.WebClient
     $webClient.Proxy = New-Object System.Net.WebProxy($Proxy)
     $webClient.DownloadFile($nodeUrl, $nodeMsi)
     
-    Write-Host "  Installing Node.js..."
+    Write-Host "  Installing Node.js v20..."
     Start-Process msiexec.exe -ArgumentList "/i", $nodeMsi, "/quiet", "/norestart" -Wait
     
+    # Refresh PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     
-    Write-Host "  Node.js installed!"
-    Write-Host ""
-    Write-Host "  Please reopen PowerShell and run this script again!"
-    Read-Host "Press Enter to exit"
-    exit
-} else {
-    Write-Host "  Node.js found: $nodeVersion"
+    # Add Node.js path manually
+    $nodePath = "C:\Program Files\nodejs"
+    if (Test-Path $nodePath) {
+        $env:Path = "$nodePath;$env:Path"
+    }
+    
+    $newVersion = node --version 2>$null
+    if ($newVersion) {
+        Write-Host "  Node.js $newVersion installed!"
+    } else {
+        Write-Host "  Node.js installed! Please reopen PowerShell and run again."
+        Read-Host "Press Enter to exit"
+        exit
+    }
 }
 
 # Install Clawdbot
 Write-Host "[2/4] Installing Clawdbot..."
 npm config set proxy $Proxy
 npm config set https-proxy $Proxy
+
+# Clear npm cache first
+npm cache clean --force 2>$null
+
 npm install -g clawdbot
 Write-Host "  Clawdbot installed!"
+
+# Refresh PATH to find clawdbot
+$npmGlobal = npm config get prefix 2>$null
+if ($npmGlobal) {
+    $env:Path = "$npmGlobal;$env:Path"
+}
 
 # Create desktop shortcut
 Write-Host "[3/4] Creating startup script..."
@@ -69,7 +102,7 @@ echo   Clawdbot Node - $NodeName
 echo   Gateway: ${GatewayHost}:${GatewayPort}
 echo ========================================
 echo.
-clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
+call clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
 pause
 "@
 
@@ -89,4 +122,19 @@ Write-Host "    clawdbot nodes approve <requestId>"
 Write-Host "========================================"
 Write-Host ""
 
-clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
+# Try to find clawdbot
+$clawdbotPath = Get-Command clawdbot -ErrorAction SilentlyContinue
+if ($clawdbotPath) {
+    & clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
+} else {
+    # Try npm global path
+    $npmPrefix = npm config get prefix 2>$null
+    $clawdbotExe = "$npmPrefix\clawdbot.cmd"
+    if (Test-Path $clawdbotExe) {
+        & $clawdbotExe node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
+    } else {
+        Write-Host "ERROR: clawdbot not found in PATH"
+        Write-Host "Please reopen PowerShell and run: clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName"
+        Read-Host "Press Enter to exit"
+    }
+}
