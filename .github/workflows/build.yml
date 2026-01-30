@@ -24,10 +24,10 @@ jobs:
     
     - name: Build EXE
       run: |
-        pyinstaller --onefile --console --name "CDR弹窗处理工具" cdr_popup_handler.py
+        pyinstaller --onefile --console --name "CDR-Popup-Handler" cdr_popup_handler.py
     
     - name: Upload EXE
       uses: actions/upload-artifact@v4
       with:
-        name: CDR弹窗处理工具
-        path: dist/CDR弹窗处理工具.exe
+        name: CDR-Popup-Handler
+        path: dist/CDR-Popup-Handler.exe
