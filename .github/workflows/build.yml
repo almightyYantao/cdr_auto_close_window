@@ -44,7 +44,7 @@ jobs:
     
     - name: Build Hook EXE
       run: |
-        pyinstaller --onefile --console --name "CDR-Popup-Handler-Hook" --add-data "gdi_hook.dll;." cdr_popup_handler_hook.py
+        pyinstaller --onefile --console --name "CDR-Popup-Handler-Hook" cdr_popup_handler_hook.py
     
     - name: Upload Standard EXE
       uses: actions/upload-artifact@v4
