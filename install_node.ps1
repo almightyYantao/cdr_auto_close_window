@@ -1,5 +1,5 @@
-# Clawdbot Node Windows 一键安装脚本 (带代理)
-# 用法: 在 PowerShell (管理员) 中运行
+# Clawdbot Node Windows Install Script
+# Run in PowerShell (Admin)
 
 param(
     [string]$GatewayHost = "10.10.12.76",
@@ -8,90 +8,85 @@ param(
     [string]$Proxy = "http://10.10.12.76:7897"
 )
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Clawdbot Node 一键安装脚本" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "========================================"
+Write-Host "  Clawdbot Node Install Script"
+Write-Host "========================================"
 Write-Host ""
 
-# 设置代理
-Write-Host "[0/4] 设置代理: $Proxy" -ForegroundColor Yellow
+# Set proxy
+Write-Host "[0/4] Setting proxy: $Proxy"
 $env:HTTP_PROXY = $Proxy
 $env:HTTPS_PROXY = $Proxy
 $env:ALL_PROXY = $Proxy
 [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy($Proxy)
-Write-Host "  ✅ 代理已设置" -ForegroundColor Green
+Write-Host "  Done"
 
-# 1. 检查 Node.js
-Write-Host "[1/4] 检查 Node.js..." -ForegroundColor Yellow
+# Check Node.js
+Write-Host "[1/4] Checking Node.js..."
 $nodeVersion = node --version 2>$null
 if (-not $nodeVersion) {
-    Write-Host "  -> 未安装 Node.js，正在安装..." -ForegroundColor Yellow
+    Write-Host "  Node.js not found, installing..."
     
-    # 直接下载 MSI
     $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
     $nodeMsi = "$env:TEMP\node-installer.msi"
     
-    Write-Host "  -> 下载 Node.js (通过代理)..." -ForegroundColor Gray
+    Write-Host "  Downloading Node.js..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
     $webClient = New-Object System.Net.WebClient
     $webClient.Proxy = New-Object System.Net.WebProxy($Proxy)
     $webClient.DownloadFile($nodeUrl, $nodeMsi)
     
-    Write-Host "  -> 安装 Node.js..." -ForegroundColor Gray
+    Write-Host "  Installing Node.js..."
     Start-Process msiexec.exe -ArgumentList "/i", $nodeMsi, "/quiet", "/norestart" -Wait
     
-    # 刷新环境变量
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     
-    Write-Host "  ✅ Node.js 安装完成" -ForegroundColor Green
+    Write-Host "  Node.js installed!"
     Write-Host ""
-    Write-Host "  ⚠️ 请重新打开 PowerShell 再运行此脚本！" -ForegroundColor Yellow
-    Read-Host "按 Enter 退出"
+    Write-Host "  Please reopen PowerShell and run this script again!"
+    Read-Host "Press Enter to exit"
     exit
 } else {
-    Write-Host "  ✅ Node.js 已安装: $nodeVersion" -ForegroundColor Green
+    Write-Host "  Node.js found: $nodeVersion"
 }
 
-# 2. 设置 npm 代理并安装 Clawdbot
-Write-Host "[2/4] 安装 Clawdbot..." -ForegroundColor Yellow
+# Install Clawdbot
+Write-Host "[2/4] Installing Clawdbot..."
 npm config set proxy $Proxy
 npm config set https-proxy $Proxy
 npm install -g clawdbot
-Write-Host "  ✅ Clawdbot 安装完成" -ForegroundColor Green
+Write-Host "  Clawdbot installed!"
 
-# 3. 创建桌面快捷启动脚本
-Write-Host "[3/4] 创建启动脚本..." -ForegroundColor Yellow
+# Create desktop shortcut
+Write-Host "[3/4] Creating startup script..."
 
 $startScript = @"
 @echo off
 title Clawdbot Node
 echo ========================================
 echo   Clawdbot Node - $NodeName
-echo   Gateway: $GatewayHost`:$GatewayPort
+echo   Gateway: ${GatewayHost}:${GatewayPort}
 echo ========================================
 echo.
-clawdbot node run --host $GatewayHost --port $GatewayPort --display-name "$NodeName"
+clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
 pause
 "@
 
 $startScriptPath = "$env:USERPROFILE\Desktop\Clawdbot-Node.bat"
 $startScript | Out-File -FilePath $startScriptPath -Encoding ASCII
-Write-Host "  ✅ 启动脚本: $startScriptPath" -ForegroundColor Green
+Write-Host "  Script created: $startScriptPath"
 
-# 4. 直接启动节点
-Write-Host "[4/4] 启动节点连接..." -ForegroundColor Yellow
+# Start node
+Write-Host "[4/4] Starting node..."
 Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  节点正在运行，等待 Gateway 审批..." -ForegroundColor Cyan
-Write-Host "" -ForegroundColor Cyan
-Write-Host "  Gateway 端执行:" -ForegroundColor White
-Write-Host "    clawdbot nodes pending" -ForegroundColor Yellow
-Write-Host "    clawdbot nodes approve <requestId>" -ForegroundColor Yellow
-Write-Host "" -ForegroundColor Cyan
-Write-Host "  审批后节点即可使用" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "========================================"
+Write-Host "  Node is running, waiting for approval"
+Write-Host ""
+Write-Host "  On Gateway run:"
+Write-Host "    clawdbot nodes pending"
+Write-Host "    clawdbot nodes approve <requestId>"
+Write-Host "========================================"
 Write-Host ""
 
-# 启动节点
-& clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
+clawdbot node run --host $GatewayHost --port $GatewayPort --display-name $NodeName
