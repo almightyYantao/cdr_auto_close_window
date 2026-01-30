@@ -5,7 +5,7 @@ param(
     [string]$GatewayHost = "10.10.12.76",
     [string]$GatewayPort = "18789",
     [string]$NodeName = "Windows-Test-Node",
-    [string]$Proxy = "http://127.0.0.1:7897"
+    [string]$Proxy = "http://10.10.12.76:7897"
 )
 
 Write-Host "========================================" -ForegroundColor Cyan
