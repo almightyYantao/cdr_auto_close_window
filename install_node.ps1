@@ -30,10 +30,10 @@ if (-not $nodeVersion) {
     Write-Host "  Node.js not found"
     $needInstall = $true
 } else {
-    # Check version >= 20
+    # Check version >= 22
     $versionNum = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
-    if ($versionNum -lt 20) {
-        Write-Host "  Node.js $nodeVersion is too old (need v20+)"
+    if ($versionNum -lt 22) {
+        Write-Host "  Node.js $nodeVersion is too old (need v22+)"
         $needInstall = $true
     } else {
         Write-Host "  Node.js $nodeVersion OK"
@@ -41,9 +41,9 @@ if (-not $nodeVersion) {
 }
 
 if ($needInstall) {
-    Write-Host "  Downloading Node.js v20..."
+    Write-Host "  Downloading Node.js v22..."
     
-    $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
+    $nodeUrl = "https://nodejs.org/dist/v22.13.0/node-v22.13.0-x64.msi"
     $nodeMsi = "$env:TEMP\node-installer.msi"
     
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -52,7 +52,7 @@ if ($needInstall) {
     $webClient.Proxy = New-Object System.Net.WebProxy($Proxy)
     $webClient.DownloadFile($nodeUrl, $nodeMsi)
     
-    Write-Host "  Installing Node.js v20..."
+    Write-Host "  Installing Node.js v22..."
     Start-Process msiexec.exe -ArgumentList "/i", $nodeMsi, "/quiet", "/norestart" -Wait
     
     # Refresh PATH
