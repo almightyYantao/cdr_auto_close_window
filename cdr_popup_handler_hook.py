@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-CorelDRAW 弹窗自动处理工具 v4.0 (Hook 版本)
-使用 DLL 注入拦截 GDI 文本绘制函数，获取自绘控件的文本
+CorelDRAW 弹窗自动处理工具 v5.0
+结合 Hook 获取 GDI 文本 + 精确获取当前弹窗的按钮
 """
 
 import time
@@ -10,62 +10,161 @@ import os
 import ctypes
 from ctypes import wintypes
 from datetime import datetime
-import mmap
-import struct
 
 # Windows API
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
-psapi = ctypes.windll.psapi
 
 # 常量
 BM_CLICK = 0x00F5
+WM_GETTEXT = 0x000D
+WM_GETTEXTLENGTH = 0x000E
+GWL_STYLE = -16
+BS_DEFPUSHBUTTON = 0x0001
+BS_PUSHBUTTON = 0x0000
+
 PROCESS_ALL_ACCESS = 0x1F0FFF
 MEM_COMMIT = 0x1000
 MEM_RESERVE = 0x2000
 PAGE_READWRITE = 0x04
 MEM_RELEASE = 0x8000
 
-# 共享内存常量
+# 共享内存
 SHARED_MEM_NAME = "CDRPopupHandlerSharedMem"
 MAX_TEXT_LENGTH = 4096
 MAX_TEXT_COUNT = 100
 
-# 回调函数类型
+# 回调类型
 EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 EnumChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
 
 def log(msg):
-    """打印带时间戳的日志"""
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}")
 
 
+def get_window_text(hwnd):
+    """获取窗口标题"""
+    length = user32.GetWindowTextLengthW(hwnd) + 1
+    buffer = ctypes.create_unicode_buffer(length)
+    user32.GetWindowTextW(hwnd, buffer, length)
+    return buffer.value
+
+
+def get_control_text(hwnd):
+    """获取控件文本（包括用 WM_GETTEXT）"""
+    # 先用 GetWindowText
+    text = get_window_text(hwnd)
+    if text:
+        return text
+    
+    # 再用 WM_GETTEXT
+    length = user32.SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0)
+    if length > 0:
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.SendMessageW(hwnd, WM_GETTEXT, length + 1, buffer)
+        return buffer.value
+    
+    return ""
+
+
+def get_class_name(hwnd):
+    """获取类名"""
+    buffer = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buffer, 256)
+    return buffer.value
+
+
+def is_button(hwnd):
+    """检查是否是按钮"""
+    class_name = get_class_name(hwnd)
+    return 'Button' in class_name or 'BUTTON' in class_name.upper()
+
+
+def find_child_windows(parent_hwnd):
+    """获取所有子窗口"""
+    children = []
+    def callback(hwnd, lparam):
+        children.append(hwnd)
+        return True
+    user32.EnumChildWindows(parent_hwnd, EnumChildProc(callback), 0)
+    return children
+
+
+def get_dialog_info(hwnd):
+    """获取对话框的所有信息"""
+    info = {
+        'title': get_window_text(hwnd),
+        'buttons': [],
+        'texts': [],
+        'all_content': []
+    }
+    
+    children = find_child_windows(hwnd)
+    
+    for child in children:
+        text = get_control_text(child)
+        class_name = get_class_name(child)
+        
+        if not text:
+            continue
+        
+        info['all_content'].append(text)
+        
+        if is_button(child):
+            info['buttons'].append({
+                'hwnd': child,
+                'text': text,
+                'class': class_name
+            })
+        else:
+            info['texts'].append(text)
+    
+    return info
+
+
+def click_button(hwnd):
+    """点击按钮"""
+    user32.SendMessageW(hwnd, BM_CLICK, 0, 0)
+    time.sleep(0.1)
+    return True
+
+
+def click_button_by_text(dialog_info, button_texts):
+    """根据文本点击按钮"""
+    if isinstance(button_texts, str):
+        button_texts = [button_texts]
+    
+    for btn in dialog_info['buttons']:
+        btn_text = btn['text']
+        for target in button_texts:
+            # 多种匹配方式
+            if (target.lower() == btn_text.lower() or
+                target.lower() in btn_text.lower() or
+                target.replace('&', '') == btn_text.replace('&', '') or
+                target in btn_text):
+                log(f"  >>> 点击按钮: '{btn_text}'")
+                click_button(btn['hwnd'])
+                return True
+    
+    return False
+
+
 class SharedMemory:
-    """共享内存管理类"""
+    """共享内存读取"""
     
     def __init__(self):
         self.handle = None
-        self.size = 4 + 8 + (MAX_TEXT_COUNT * MAX_TEXT_LENGTH * 2) + 4  # textCount + hwnd + texts + ready
-        
+        self.size = 4 + 8 + (MAX_TEXT_COUNT * MAX_TEXT_LENGTH * 2) + 4
+    
     def create(self):
-        """创建或打开共享内存"""
         self.handle = kernel32.CreateFileMappingW(
-            ctypes.c_void_p(-1),  # INVALID_HANDLE_VALUE
-            None,
-            PAGE_READWRITE,
-            0,
-            self.size,
-            SHARED_MEM_NAME
+            ctypes.c_void_p(-1), None, PAGE_READWRITE, 0, self.size, SHARED_MEM_NAME
         )
-        if not self.handle:
-            log(f"创建共享内存失败: {kernel32.GetLastError()}")
-            return False
-        return True
+        return self.handle is not None
     
     def read_texts(self):
-        """读取共享内存中的文本"""
         if not self.handle:
             return []
         
@@ -74,7 +173,7 @@ class SharedMemory:
             return []
         
         try:
-            # 读取 textCount
+            import struct
             count_buf = (ctypes.c_char * 4)()
             ctypes.memmove(count_buf, pBuf, 4)
             text_count = struct.unpack('I', bytes(count_buf))[0]
@@ -83,13 +182,13 @@ class SharedMemory:
                 text_count = MAX_TEXT_COUNT
             
             texts = []
-            offset = 4 + 8  # Skip textCount and hwnd
+            offset = 4 + 8
             
             for i in range(text_count):
                 text_buf = (ctypes.c_wchar * MAX_TEXT_LENGTH)()
                 ctypes.memmove(text_buf, pBuf + offset, MAX_TEXT_LENGTH * 2)
                 text = text_buf.value
-                if text:
+                if text and len(text) > 1:  # 过滤单字符噪音
                     texts.append(text)
                 offset += MAX_TEXT_LENGTH * 2
             
@@ -98,19 +197,15 @@ class SharedMemory:
             kernel32.UnmapViewOfFile(pBuf)
     
     def clear(self):
-        """清空共享内存中的文本"""
         if not self.handle:
             return
-        
         pBuf = kernel32.MapViewOfFile(self.handle, 0xF001F, 0, 0, self.size)
         if pBuf:
-            # 设置 textCount = 0
             zero = (ctypes.c_char * 4)()
             ctypes.memmove(pBuf, zero, 4)
             kernel32.UnmapViewOfFile(pBuf)
     
     def close(self):
-        """关闭共享内存"""
         if self.handle:
             kernel32.CloseHandle(self.handle)
             self.handle = None
@@ -124,18 +219,14 @@ class DLLInjector:
         self.injected_pids = set()
     
     def inject(self, pid):
-        """注入 DLL 到目标进程"""
         if pid in self.injected_pids:
             return True
         
-        # 打开目标进程
         hProcess = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
         if not hProcess:
-            log(f"无法打开进程 {pid}: {kernel32.GetLastError()}")
             return False
         
         try:
-            # 在目标进程分配内存
             dll_path_bytes = (self.dll_path + '\0').encode('utf-16-le')
             dll_path_len = len(dll_path_bytes)
             
@@ -143,46 +234,34 @@ class DLLInjector:
                 hProcess, None, dll_path_len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
             )
             if not pRemoteMem:
-                log(f"VirtualAllocEx 失败: {kernel32.GetLastError()}")
                 return False
             
-            # 写入 DLL 路径
             written = ctypes.c_size_t()
             if not kernel32.WriteProcessMemory(hProcess, pRemoteMem, dll_path_bytes, dll_path_len, ctypes.byref(written)):
-                log(f"WriteProcessMemory 失败: {kernel32.GetLastError()}")
                 kernel32.VirtualFreeEx(hProcess, pRemoteMem, 0, MEM_RELEASE)
                 return False
             
-            # 获取 LoadLibraryW 地址
             hKernel32 = kernel32.GetModuleHandleW("kernel32.dll")
             pLoadLibraryW = kernel32.GetProcAddress(hKernel32, b"LoadLibraryW")
             
-            # 创建远程线程加载 DLL
             hThread = kernel32.CreateRemoteThread(
                 hProcess, None, 0, pLoadLibraryW, pRemoteMem, 0, None
             )
             if not hThread:
-                log(f"CreateRemoteThread 失败: {kernel32.GetLastError()}")
                 kernel32.VirtualFreeEx(hProcess, pRemoteMem, 0, MEM_RELEASE)
                 return False
             
-            # 等待线程完成
             kernel32.WaitForSingleObject(hThread, 5000)
             kernel32.CloseHandle(hThread)
-            
-            # 清理
             kernel32.VirtualFreeEx(hProcess, pRemoteMem, 0, MEM_RELEASE)
             
             self.injected_pids.add(pid)
             log(f"✅ DLL 注入成功: PID {pid}")
             return True
-            
         finally:
             kernel32.CloseHandle(hProcess)
     
     def inject_coreldraw(self):
-        """注入到所有 CorelDRAW 进程"""
-        # 查找 CorelDRAW 进程
         def callback(hwnd, lparam):
             if user32.IsWindowVisible(hwnd):
                 title = get_window_text(hwnd)
@@ -190,95 +269,73 @@ class DLLInjector:
                     pid = ctypes.c_ulong()
                     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                     if pid.value and pid.value not in self.injected_pids:
-                        log(f"发现 CorelDRAW 进程: PID {pid.value}")
+                        log(f"发现 CorelDRAW: PID {pid.value}")
                         self.inject(pid.value)
             return True
-        
         user32.EnumWindows(EnumWindowsProc(callback), 0)
 
 
-def get_window_text(hwnd):
-    """获取窗口标题"""
-    length = user32.GetWindowTextLengthW(hwnd) + 1
-    buffer = ctypes.create_unicode_buffer(length)
-    user32.GetWindowTextW(hwnd, buffer, length)
-    return buffer.value
-
-
-def get_class_name(hwnd):
-    """获取窗口类名"""
-    buffer = ctypes.create_unicode_buffer(256)
-    user32.GetClassNameW(hwnd, buffer, 256)
-    return buffer.value
-
-
-def find_child_windows(parent_hwnd):
-    """查找所有子窗口"""
-    children = []
-    def callback(hwnd, lparam):
-        children.append(hwnd)
-        return True
-    user32.EnumChildWindows(parent_hwnd, EnumChildProc(callback), 0)
-    return children
-
-
-def click_button_by_text(parent_hwnd, button_texts):
-    """根据按钮文本点击按钮"""
-    if isinstance(button_texts, str):
-        button_texts = [button_texts]
+def handle_popup(hwnd, dialog_info, hook_texts):
+    """处理弹窗"""
+    title = dialog_info['title']
+    buttons = [b['text'] for b in dialog_info['buttons']]
+    texts = dialog_info['texts']
     
-    children = find_child_windows(parent_hwnd)
-    for child in children:
-        text = get_window_text(child)
-        class_name = get_class_name(child)
-        
-        if 'Button' in class_name:
-            for btn_text in button_texts:
-                if btn_text.lower() in text.lower() or btn_text in text:
-                    log(f"  >>> 点击按钮: '{text}'")
-                    user32.SendMessageW(child, BM_CLICK, 0, 0)
-                    return True
-    return False
-
-
-def handle_popup_with_hook_data(hwnd, title, hook_texts):
-    """根据 Hook 获取的文本处理弹窗"""
-    content = ' '.join(hook_texts)
+    # 合并所有文本来源
+    all_text = ' '.join(dialog_info['all_content'] + hook_texts)
+    
+    log(f"=" * 50)
     log(f"弹窗标题: '{title}'")
-    log(f"Hook 捕获的文本: {content[:500]}...")
+    log(f"按钮列表: {buttons}")
+    log(f"静态文本: {texts}")
+    log(f"Hook文本: {hook_texts[:5]}...")  # 只显示前5个
+    log(f"合并内容: {all_text[:200]}...")
     
-    # 规则匹配
-    # 1. 无效的轮廓 ID
-    if '无效' in content and '轮廓' in content:
-        log("  -> 匹配规则: 无效的轮廓 ID")
-        if click_button_by_text(hwnd, ['忽略', '忽略(&I)', 'Ignore']):
+    # ========== 规则匹配 ==========
+    
+    # 规则1: 无效的轮廓 ID -> 点击忽略
+    if '无效' in all_text and '轮廓' in all_text:
+        log("  -> 匹配: 无效的轮廓 ID")
+        if click_button_by_text(dialog_info, ['忽略', '忽略(&I)', 'Ignore']):
             return True
     
-    # 2. 无效标头
-    if '无法打开' in content or '无效标头' in content:
-        log("  -> 匹配规则: 无效标头")
-        if click_button_by_text(hwnd, ['OK', '确定']):
+    # 规则2: 如果只有一个 OK 按钮，直接点击
+    if len(buttons) == 1 and ('OK' in buttons[0] or '确定' in buttons[0]):
+        log("  -> 匹配: 单个 OK 按钮")
+        if click_button_by_text(dialog_info, ['OK', '确定']):
             return True
     
-    # 3. 文件损坏
-    if '损坏' in content:
-        log("  -> 匹配规则: 文件损坏")
-        if click_button_by_text(hwnd, ['OK', '确定']):
+    # 规则3: 无效标头 / 无法打开 -> OK
+    if '无法打开' in all_text or '无效标头' in all_text or '无效的' in all_text:
+        log("  -> 匹配: 无效/无法打开")
+        if click_button_by_text(dialog_info, ['OK', '确定', '忽略', '忽略(&I)']):
             return True
     
-    # 4. PS/PRN 导入
-    if 'PS/PRN' in content:
-        log("  -> 匹配规则: PS/PRN 导入")
-        # 先选曲线
-        click_button_by_text(hwnd, ['曲线', '曲线(&C)'])
+    # 规则4: 文件损坏 -> OK
+    if '损坏' in all_text:
+        log("  -> 匹配: 文件损坏")
+        if click_button_by_text(dialog_info, ['OK', '确定']):
+            return True
+    
+    # 规则5: PS/PRN 导入
+    if 'PS/PRN' in all_text:
+        log("  -> 匹配: PS/PRN")
+        click_button_by_text(dialog_info, ['曲线', '曲线(&C)'])
         time.sleep(0.2)
-        if click_button_by_text(hwnd, ['OK', '确定']):
+        if click_button_by_text(dialog_info, ['OK', '确定']):
             return True
     
-    # 5. 按钮组合匹配
-    if '关于' in content and '重试' in content and '忽略' in content:
-        log("  -> 匹配规则: 关于/重试/忽略 按钮组合")
-        if click_button_by_text(hwnd, ['忽略', '忽略(&I)']):
+    # 规则6: 有 忽略 按钮且包含错误关键词
+    if any('忽略' in b for b in buttons):
+        if any(kw in all_text for kw in ['错误', '无效', '失败', '问题', 'error', 'invalid']):
+            log("  -> 匹配: 错误 + 忽略按钮")
+            if click_button_by_text(dialog_info, ['忽略', '忽略(&I)']):
+                return True
+    
+    # 规则7: 通用 - 如果有 OK/确定 按钮且是 CorelDRAW 弹窗
+    if 'CorelDRAW' in title:
+        if click_button_by_text(dialog_info, ['OK', '确定', '是', '是(&Y)', 'Yes']):
+            log("  -> 匹配: CorelDRAW 通用弹窗")
             return True
     
     log("  -> 未匹配任何规则")
@@ -293,8 +350,9 @@ def find_coreldraw_dialogs():
         if user32.IsWindowVisible(hwnd):
             title = get_window_text(hwnd)
             class_name = get_class_name(hwnd)
-            if class_name == '#32770' and 'CorelDRAW' in title:
-                dialogs.append((hwnd, title))
+            # #32770 是标准对话框类
+            if class_name == '#32770' and ('CorelDRAW' in title or 'Corel' in title):
+                dialogs.append(hwnd)
         return True
     
     user32.EnumWindows(EnumWindowsProc(callback), 0)
@@ -303,27 +361,33 @@ def find_coreldraw_dialogs():
 
 def main():
     print("=" * 60)
-    print("CorelDRAW 弹窗自动处理工具 v4.0 (Hook 版本)")
+    print("CorelDRAW 弹窗自动处理工具 v5.0")
     print("=" * 60)
     print()
     
-    # 检查 DLL 是否存在
-    dll_path = os.path.join(os.path.dirname(__file__), "gdi_hook.dll")
-    if not os.path.exists(dll_path):
-        log(f"❌ 找不到 Hook DLL: {dll_path}")
-        log("请先编译 gdi_hook.cpp")
-        return
+    # 检查 DLL
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dll_path = os.path.join(script_dir, "gdi_hook.dll")
     
-    log("初始化共享内存...")
-    shared_mem = SharedMemory()
-    if not shared_mem.create():
-        log("❌ 共享内存初始化失败")
-        return
+    # 也检查 PyInstaller 打包后的路径
+    if hasattr(sys, '_MEIPASS'):
+        dll_path_temp = os.path.join(sys._MEIPASS, "gdi_hook.dll")
+        if os.path.exists(dll_path_temp):
+            dll_path = dll_path_temp
     
-    log("初始化 DLL 注入器...")
-    injector = DLLInjector(dll_path)
+    use_hook = os.path.exists(dll_path)
     
-    log("程序启动完成")
+    if use_hook:
+        log(f"Hook DLL: {dll_path}")
+        shared_mem = SharedMemory()
+        shared_mem.create()
+        injector = DLLInjector(dll_path)
+    else:
+        log("⚠️ 未找到 gdi_hook.dll，将只使用标准 API")
+        shared_mem = None
+        injector = None
+    
+    log("程序启动")
     log("正在监控 CorelDRAW 弹窗...")
     log("按 Ctrl+C 退出")
     print("-" * 60)
@@ -333,32 +397,36 @@ def main():
     
     try:
         while True:
-            # 尝试注入到 CorelDRAW
-            injector.inject_coreldraw()
+            # 注入 DLL
+            if injector:
+                injector.inject_coreldraw()
             
             # 查找对话框
             dialogs = find_coreldraw_dialogs()
             
-            for hwnd, title in dialogs:
+            for hwnd in dialogs:
                 if hwnd in handled_hwnds:
                     continue
                 
-                # 等待一下让 Hook 捕获文本
+                # 等待一下让内容稳定
                 time.sleep(0.3)
                 
-                # 读取 Hook 捕获的文本
-                hook_texts = shared_mem.read_texts()
+                # 获取对话框信息
+                dialog_info = get_dialog_info(hwnd)
                 
-                log(f"检测到对话框: {title}")
-                log(f"  Hook 捕获了 {len(hook_texts)} 个文本")
+                # 获取 Hook 文本
+                hook_texts = []
+                if shared_mem:
+                    hook_texts = shared_mem.read_texts()
                 
-                if handle_popup_with_hook_data(hwnd, title, hook_texts):
+                if handle_popup(hwnd, dialog_info, hook_texts):
                     handled_count += 1
                     handled_hwnds.add(hwnd)
                     log(f"✅ 已处理 {handled_count} 个弹窗")
                 
-                # 清空捕获的文本
-                shared_mem.clear()
+                # 清空 Hook 缓存
+                if shared_mem:
+                    shared_mem.clear()
             
             # 清理已关闭的窗口
             handled_hwnds = {h for h in handled_hwnds if user32.IsWindow(h)}
@@ -369,7 +437,8 @@ def main():
         print()
         log(f"程序退出，共处理 {handled_count} 个弹窗")
     finally:
-        shared_mem.close()
+        if shared_mem:
+            shared_mem.close()
 
 
 if __name__ == "__main__":
@@ -377,8 +446,7 @@ if __name__ == "__main__":
         print("❌ 此程序只能在 Windows 上运行！")
         sys.exit(1)
     
-    # 需要管理员权限
     if ctypes.windll.shell32.IsUserAnAdmin() == 0:
-        log("⚠️ 建议以管理员权限运行以确保 DLL 注入成功")
+        log("⚠️ 建议以管理员权限运行")
     
     main()
